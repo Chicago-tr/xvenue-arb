@@ -4,7 +4,7 @@ End-to-end analytics platform that processes live cryptocurrency data from multi
 
 ## Features
 
-- PySpark ETL pipeline transforms live cryptocurrency quotes into OHLC bars and cross-exchange spread metrics.
+- PySpark ETL pipeline for transforming live cryptocurrency quotes into OHLC bars and cross-exchange spread metrics.
 - P50/P90/P99 API latency tracking across exchanges, plus rolling last 5m summary stats table.
 - HTTP error rate monitoring and structured logging.
 - Rolling regression residuals, spreads, and volatility forecasts computed via PySpark to power cross-exchange analytics.
