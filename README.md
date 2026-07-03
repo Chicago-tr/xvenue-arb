@@ -1,101 +1,92 @@
-# ExchangeAgg
+# Arb: Cross-Exchange Crypto Analytics
 
-End-to-end analytics platform that processes live cryptocurrency data from multiple exchanges, transforms it with PySpark, and serves interactive Dash dashboards for data analytics such as: latency, spreads, and volatility.
+An end-to-end analytics platform for live crypto market data, built to highlight trading research, execution risk monitoring, and data engineering.
 
-## Features
+This project ingests bid/ask quotes from Binance and Coinbase, stores them in PostgreSQL, computes minute-level bars and cross-exchange spread metrics with PySpark, and displays analytics through a Plotly Dash dashboard.
 
-- PySpark ETL pipeline for transforming live cryptocurrency quotes into OHLC bars and cross-exchange spread metrics.
-- P50/P90/P99 API latency tracking across exchanges, plus rolling last 5m summary stats table.
-- HTTP error rate monitoring and structured logging.
-- Rolling regression residuals, spreads, and volatility forecasts computed via PySpark to power cross-exchange analytics.
-- Interactive dashboards built with Plotly Dash for real-time visualization.
-- Data quality safeguards including ETL state management, duplicate detection, and comprehensive logging.
-- Modular design to support the easy addition of new exchanges or currency pairs.
-- Multiprocessing orchestrator (main.py) coordinating API data collection, Spark analytics, and Dash dashboards.
+## Why this matters
+- Demonstrates a full-stack trading analytics pipeline.
+- Combines real-time data ingestion, ETL, quantitative analysis, and visualization.
+- Highlights both signal research and operations-focused monitoring.
 
+## Core capabilities
+- Live price ingestion from Binance and Coinbase
+- Postgres-backed storage for market quotes and latency telemetry
+- PySpark ETL creating 1-minute OHLC mid-price bars and cross-exchange spread metrics
+- Rolling regression residuals, z-scores, and volatility forecasting
+- Dash dashboard for price/spread, regression, and latency analytics
+- Docker Compose and local deployment support
 
 ## Architecture
 The platform consists of three main components:
-* **TypeScript collection service** that streams live quotes and metadata from multiple exchanges into PostgreSQL.
-* **PySpark analytics jobs** that build OHLC bars, compute spreads, latency statistics, and rolling volatility / regression metrics.
-* **Dash dashboards** that query PostgreSQL and present real-time and historical analytics for latency, spreads and data quality.
-```mermaid
-graph LR
-    
-    A[Data Collection<br/><br/>Exchange APIs,<br/>Bid/Ask, Latency, Status logging] --> B[PostgreSQL Storage<br/><br/>Create bars, Latency metrics, Quality checks<br/>]
-    
-    B --> C[SQL Aggregation<br/><br/>OHLC, P50/P90/P99<br/>distributions, etc.]
-    
-    C --> D[PySpark/Pandas<br/><br/>Analysis,<br/>Data validation]
-    D --> E[Dash/Plotly<br/><br/>Flowing updates,<br/>Multi-chart layout<br/>]
-    E --> F[Dashboard<br/><br/>Symbol filtering,<br/>Date ranges,<br/>Exchange selection,<br/>Cross-asset analytics]
-    
-    
-    style A fill:#e1f5fe
-    style F fill:#c8e6c9
-    classDef title font-size:14px,font-weight:bold,color:#333
-    class A,B,C,D,E,F title
-```
+- **TypeScript ingestion service** that collects live quotes and stores them in PostgreSQL.
+- **PySpark analytics jobs** that compute minute bars, cross-exchange spreads, and regression metrics.
+- **Dash dashboards** that visualize market data, latency, and model signals.
 
-## Quick Start (Local)
-1. Clone the Repository
- ```bash
- git clone https://github.com/Chicago-tr/ExchangeAggregator.git
-  ```
-2. Install Dependencies
+## Quick start with Docker
+1. Copy the example env file:
 ```bash
-cd ExchangeAggregator
-#Postgres
-brew install postgresql@16
-brew services start postgresql@16
-createdb name_your_db
+cp .env.example .env
+```
+2. Edit `.env` and set the required values.
+3. Start the stack:
+```bash
+docker compose up --build
+```
+4. Open `http://127.0.0.1:8050` in your browser.
 
-#Python deps
-pip install -r python_service/requirements.txt
+## Manual local setup
+### Prerequisites
+- Docker & Docker Compose
+- Python 3.11+ / 3.12+
+- Node.js 20+
+- PostgreSQL 16
+- PostgreSQL JDBC driver for Spark
 
-# TypeScript deps
+### Install dependencies
+```bash
+python -m pip install -r python_service/requirements.txt
 cd typescript_service && npm install && cd ..
 ```
-3. Configure environment variables such as DB_URL and DB_NAME (check .env.example)
-   
-4. Migrate database
-```bash
-npx drizzle-kit migrate
-```
 
-6. Run the platform
+### Configure environment
+Copy `.env.example` to `.env` and update values such as `DB_URL`, `JDBC_URL`, and `PJAR`.
+
+### Run locally
 ```bash
 python main.py
 ```
-This will start the orchestrator that:
-* Launches API data collection processes.
-* Triggers PySpark analytics jobs.
-* Serves the Dash dashboards.
+
+## Environment variables
+- `PAIRS`: comma-separated symbols, e.g. `BTC-USD,ETH-USD,SOL-USD`
+- `DB_URL`: Postgres connection URL for ingestion and dashboard
+- `JDBC_URL`: JDBC URL for Spark Postgres access
+- `DB_HOST`, `DB_PORT`, `DB_NAME`: Postgres connection details for ETL state updates
+- `PJAR`: path to the PostgreSQL JDBC driver JAR
 
 ## Screenshots
 Price & spread by exchange and cross-exchange spreads:
 <img width="922" height="422" alt="homescreen" src="https://github.com/user-attachments/assets/620568d3-f2cf-48f4-83a5-51bdcfd16794" />
 
 ---
----
+
 Rolling regression residuals and summary statistics:
-<img width="922" height="422" alt="regression_residuals" src="https://github.com/user-attachments/assets/f7e236b6-772d-4c4b-ba7d-16ce0ecc1cf0" />
+<img width="922" height="422" alt="regression_residuals" src="https://github.com/user-attachments/assets/620568d3-f2cf-48f4-83a5-51bdcfd16794" />
 
 ---
----
+
 Residuals Z-score with standard deviation bars:
-<img width="922" height="422" alt="spread_zscore" src="https://github.com/user-attachments/assets/71c5d795-740d-45f3-bda8-65860d2f58f6" />
+<img width="922" height="422" alt="spread_zscore" src="https://github.com/user-attachments/assets/71c5d795-740d-45f3-bda7-d2f58f6" />
 
 ---
----
+
 GARCH volatility forecast and summary statistics:
 <img width="922" height="422" alt="forecast_stats" src="https://github.com/user-attachments/assets/72b2c5f1-ac91-4b33-b5ab-b4d64b47680a" />
 
 ---
----
-1-Minute Latency distribution and P50/P90/P99 by exchange:
+
+1-Minute latency distribution and P50/P90/P99 by exchange:
 <img width="922" height="422" alt="latency" src="https://github.com/user-attachments/assets/8879a920-693b-40ec-aba7-c212def2f71b" />
 
 ## Contributing
-All contributions welcome, just fork the repo, create a feature branch, and open a pull request to ```main```.
-
+All contributions welcome. Fork the repo, create a feature branch, and open a pull request to `main`.

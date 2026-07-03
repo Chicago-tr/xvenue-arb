@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arb-postgres
+    environment:
+      POSTGRES_DB: arb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-sparkuser.sql:/docker-entrypoint-initdb.d/init.sql
+    command: postgres -c 'listen_addresses=*' -c 'shared_preload_libraries=pg_stat_statements'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d arb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  typescript_service:
+    build: ./typescript_service
+    container_name: arb-typescript
+    user: "node"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  python_analysis:
+    build: ./python_service
+    container_name: arb-python-analysis
+    user: "1000:1000"
+    command: ["python", "src/analysis_runner.py"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  python_dash:
+    build: ./python_service
+    container_name: arb-python-dash
+    user: "1000:1000"
+    command: ["python", "src/dash/app.py"]
+    env_file: .env
+    ports:
+      - "8050:8050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      python_analysis:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
