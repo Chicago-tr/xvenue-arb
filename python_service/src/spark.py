@@ -62,14 +62,11 @@ def run_spark():
     quotes_df_filtered = quotes_df.filter(F.col("timestamp") > last_processed_ts)
     quotes_df_filtered_minute = quotes_df.filter(F.col("timestamp") > next_minute)
 
-    # Get the latest timestamp and set that as the new last processed timestamp
+    # Get the latest timestamp in order toupdate ETL state after successful writes
     max_ts_row = quotes_df_filtered.agg(F.max("timestamp").alias("max_ts")).head(1)
-
+    new_last_ts = None
     if max_ts_row and max_ts_row[0]["max_ts"] is not None:
         new_last_ts = max_ts_row[0]["max_ts"]
-
-        print("Updating last_processed to:", new_last_ts)
-        update_ts(new_last_ts)
 
     # Table with derived columns
     quotes_with_features = (
@@ -131,6 +128,10 @@ def run_spark():
         "dbtable", "cross_ex_spread_1m"
     ).option("driver", "org.postgresql.Driver").mode("append").save()
 
+    if new_last_ts is not None:
+        print("Updating last_processed to:", new_last_ts)
+        update_ts(new_last_ts)
+
     VENUE_PAIRS = [{"target": 2, "ref": 1}, {"target": 1, "ref": 2}]
 
     output_schema = StructType(
@@ -171,8 +172,6 @@ def run_spark():
             drop=True
         )
 
-    cutoff_time = F.current_timestamp() - F.expr("INTERVAL 4 HOURS")
-
     bars_1m_reg = (
         spark.read.format("jdbc")
         .option("url", JDBC_URL)
@@ -180,10 +179,10 @@ def run_spark():
         .option("driver", "org.postgresql.Driver")
         .load()
     )
-    cutoff_output = last_processed_ts  # existing timestamp
-    cutoff_time = cutoff_output - F.expr("INTERVAL 4 HOURS")
 
-    bars_last_four_hours = bars_1m_reg.filter(col("bar_ts") > cutoff_time)
+    cutoff_output = last_processed_ts
+    cutoff_threshold = F.current_timestamp() - F.expr("INTERVAL 4 HOURS")
+    bars_last_four_hours = bars_1m_reg.filter(col("bar_ts") > cutoff_threshold)
     recent_output_bars = bars_1m_reg.filter(col("bar_ts") > cutoff_output)
 
     # Can check here if bar count looks good
@@ -222,7 +221,9 @@ def run_spark():
             .apply(compute_regression_residuals)
         )
 
-        new_regression_results = regression_bars.filter(col("bar_ts") > cutoff_output)
+        new_regression_results = regression_bars.filter(
+            col("bar_ts") > F.lit(cutoff_output)
+        )
         # Write to new table
         new_regression_results.select(
             col("symbol_id"),

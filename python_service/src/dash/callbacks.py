@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -8,6 +9,9 @@ from dash import Input, Output, State, callback, dash_table, html
 from db import engine
 from plotly.subplots import make_subplots
 from scipy.optimize import minimize
+
+logger = logging.getLogger(__name__)
+
 
 # Need to split-up/refactor this file eventually.
 
@@ -86,7 +90,11 @@ def update_price_spread_chart(symbol, exchanges, start_date, end_date, n_interva
 
     query += " ORDER BY b.bar_ts, e.exchange_name"
 
-    df = pd.read_sql(query, engine, params=tuple(params))
+    try:
+        df = pd.read_sql(query, engine, params=tuple(params))
+    except Exception as exc:
+        logger.exception("Failed to load price/spread data")
+        return go.Figure()
 
     if df.empty:
         return go.Figure()
@@ -159,7 +167,11 @@ def update_cross_spread_chart(symbol, start_date, end_date, n_intervals):
             ORDER BY c.bar_ts
         """
 
-    df = pd.read_sql(query, engine, params=(symbol,))
+    try:
+        df = pd.read_sql(query, engine, params=(symbol,))
+    except Exception as exc:
+        logger.exception("Failed to load cross spread data")
+        return go.Figure()
 
     if df.empty:
         return go.Figure()
@@ -221,9 +233,10 @@ def update_regression_analysis(symbol, hours):
             )
         else:
             df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
-    except Exception:
+    except Exception as exc:
+        logger.exception("Failed to load regression data")
         empty_fig = go.Figure().add_annotation(text="Query error", showarrow=False)
-        return empty_fig, empty_fig, html.Div("Error")
+        return empty_fig, empty_fig, html.Div("Query error: unable to load data")
 
     if df.empty:
         empty_fig = go.Figure().add_annotation(text="No data", showarrow=False)
@@ -300,13 +313,17 @@ def garch_volatility_forecast(symbol, hours, symbol_state):
 
     if df.empty or len(df) < 50:
         return go.Figure().add_annotation(text="Insufficient data"), html.Div()
-    bar_ts_series = pd.to_datetime(df["bar_ts"])
-    if bar_ts_series.dt.tz is None:
-        df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
-            "America/Chicago"
-        )
-    else:
-        df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
+    try:
+        bar_ts_series = pd.to_datetime(df["bar_ts"])
+        if bar_ts_series.dt.tz is None:
+            df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
+                "America/Chicago"
+            )
+        else:
+            df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
+    except Exception as exc:
+        logger.exception("Failed to convert GARCH timestamps")
+        return go.Figure().add_annotation(text="Timestamp conversion error"), html.Div()
     # Raw volatility (%)
     df["residual_bps"] = df["residual_bps"].abs()
     df["returns"] = np.log(df["residual_bps"] / df["residual_bps"].shift(1)).fillna(0)
@@ -644,7 +661,8 @@ def update_latency_dashboard(exchange_filter, start_date, end_date, n_intervals)
             total_errors = (
                 int(error_result["errors"].iloc[0]) if not error_result.empty else 0
             )
-        except:
+        except Exception as exc:
+            logger.exception("Latency error query failed")
             total_errors = 0
 
         table_data.append(

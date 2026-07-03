@@ -38,7 +38,10 @@ export async function createPriceEntry(
   bid: number,
   ask: number,
 ) {
-  await loadReferenceData();
+  if (exchangeNameToId.size === 0 || symbolCodeToId.size === 0) {
+    await loadReferenceData();
+  }
+
   const exchange_id = exchangeNameToId.get(exchangeName);
   const symbol_id = symbolCodeToId.get(symbol);
 
