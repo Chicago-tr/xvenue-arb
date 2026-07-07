@@ -7,4 +7,5 @@ python_service/src/.env
 __pycache__/
 *.pyc
 spark-warehouse/
+python_service/output/
 .git

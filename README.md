@@ -58,6 +58,37 @@ This will start the orchestrator that:
 - `DB_HOST`, `DB_PORT`, `DB_NAME`: Postgres connection details for ETL state updates
 - `PJAR`: path to the PostgreSQL JDBC driver JAR
 
+## Backtesting and execution simulation
+The project now includes a walk-forward backtesting module for residual mean reversion with execution assumptions:
+- rolling z-score signal generation from `cross_ex_regression`
+- transaction cost modeling (`fee_bps`, slippage, spread crossing)
+- latency-aware execution shift (`latency_bars`)
+- inventory/position controls and turnover tracking
+- out-of-sample evaluation via train/test split per symbol/exchange pair
+- metrics including net PnL, Sharpe, max drawdown, win rate, and turnover
+
+Run the backtest:
+```bash
+python python_service/src/backtest.py
+```
+
+Example with custom assumptions:
+```bash
+python python_service/src/backtest.py \
+  --lookback-days 21 \
+  --entry-candidates 1.5 2.0 2.5 3.0 \
+  --fee-bps 2.0 \
+  --slippage-bps 1.5 \
+  --spread-cross-bps 1.0 \
+  --latency-bars 1 \
+  --position-size-usd 2000
+```
+
+Outputs are written to `python_service/output/`:
+- `backtest_summary.csv` (group-level out-of-sample results)
+- `backtest_bars.csv` (bar-level PnL/position timeline)
+- `backtest_metrics.json` (aggregate portfolio metrics + config)
+
 
 ## Screenshots
 Price & spread by exchange and cross-exchange spreads:
@@ -85,4 +116,3 @@ GARCH volatility forecast and summary statistics:
 
 ## Contributing
 All contributions welcome, just fork the repo, create a feature branch, and open a pull request to ```main```.
-
