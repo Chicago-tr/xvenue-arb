@@ -58,12 +58,14 @@ def run_spark():
     next_minute = (last_processed_ts + timedelta(minutes=1)).replace(
         second=0, microsecond=0
     )
-    # Take only data past timestamp cutoff
-    quotes_df_filtered = quotes_df.filter(F.col("timestamp") > last_processed_ts)
-    quotes_df_filtered_minute = quotes_df.filter(F.col("timestamp") > next_minute)
+    # Take only data past timestamp cutoff and then begin at the next full minute boundary
+    quotes_df_filtered = quotes_df.filter(F.col("timestamp") > F.lit(last_processed_ts))
+    quotes_df_filtered_minute = quotes_df_filtered.filter(
+        F.col("timestamp") >= F.lit(next_minute)
+    )
 
-    # Get the latest timestamp in order toupdate ETL state after successful writes
-    max_ts_row = quotes_df_filtered.agg(F.max("timestamp").alias("max_ts")).head(1)
+    # Get the latest timestamp for rows that are actually written
+    max_ts_row = quotes_df_filtered_minute.agg(F.max("timestamp").alias("max_ts")).head(1)
     new_last_ts = None
     if max_ts_row and max_ts_row[0]["max_ts"] is not None:
         new_last_ts = max_ts_row[0]["max_ts"]
@@ -128,10 +130,6 @@ def run_spark():
         "dbtable", "cross_ex_spread_1m"
     ).option("driver", "org.postgresql.Driver").mode("append").save()
 
-    if new_last_ts is not None:
-        print("Updating last_processed to:", new_last_ts)
-        update_ts(new_last_ts)
-
     VENUE_PAIRS = [{"target": 2, "ref": 1}, {"target": 1, "ref": 2}]
 
     output_schema = StructType(
@@ -140,6 +138,7 @@ def run_spark():
             StructField("bar_ts", TimestampType(), True),
             StructField("residual", DoubleType(), True),
             StructField("residual_bps", DoubleType(), True),
+            StructField("regression_beta", DoubleType(), True),
         ]
     )
 
@@ -149,6 +148,7 @@ def run_spark():
         pdf = pdf.sort_values("bar_ts").reset_index(drop=True)
         residuals = np.full(len(pdf), np.nan)
         residual_bps = np.full(len(pdf), np.nan)
+        betas = np.full(len(pdf), np.nan)
 
         for i in range(20, len(pdf)):  # Start after 20 bars minimum
             # Dynamic window: all available (500 max)
@@ -164,11 +164,13 @@ def run_spark():
                 predicted = intercept + slope * pdf.loc[i, "ref_price"]
                 residuals[i] = pdf.loc[i, "close_mid"] - predicted
                 residual_bps[i] = (residuals[i] / pdf.loc[i, "close_mid"]) * 10000
+                betas[i] = slope
 
         pdf = pdf.copy()
         pdf["residual"] = residuals
         pdf["residual_bps"] = residual_bps
-        return pdf[["symbol_id", "bar_ts", "residual", "residual_bps"]].reset_index(
+        pdf["regression_beta"] = betas
+        return pdf[["symbol_id", "bar_ts", "residual", "residual_bps", "regression_beta"]].reset_index(
             drop=True
         )
 
@@ -232,9 +234,14 @@ def run_spark():
             F.lit(ref_id).alias("ref_exchange_id"),
             col("residual"),
             col("residual_bps").alias("regression_residual_bps"),
+            col("regression_beta"),
         ).write.format("jdbc").option("url", JDBC_URL).option(
             "dbtable", "cross_ex_regression"
         ).option("driver", "org.postgresql.Driver").mode("append").save()
+
+    if new_last_ts is not None:
+        print("Updating last_processed to:", new_last_ts)
+        update_ts(new_last_ts)
 
     spark.stop()
     return

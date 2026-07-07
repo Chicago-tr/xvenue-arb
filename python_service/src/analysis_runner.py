@@ -20,7 +20,7 @@ async def continuous_analysis():
             print(" Shutting down...")
             break
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] ❌ Analysis failed: {e}")
+            print(f"[{time.strftime('%H:%M:%S')}] Analysis failed: {e}")
             await asyncio.sleep(10)
 
 

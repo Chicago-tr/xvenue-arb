@@ -1,14 +1,15 @@
-# import callbacks
 import dash
 import dash.dcc as dcc
 import dash.html as html
-from callbacks import *  # Gets all callbacks
 from latency_layout import latency_tab
 from prices_layout import prices_tab
 from regression_layout import regression_tab
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Crypto Analytics"
+
+# import callbacks after app is created so @callback decorators can register
+from callbacks import *  # Gets all callbacks
 
 app.layout = html.Div(
     [

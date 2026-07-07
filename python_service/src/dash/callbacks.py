@@ -1,23 +1,105 @@
 import logging
+import sys
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Input, Output, State, callback, dash_table, html
+from dash import Input, Output, State, dash_table, html
+
+# Use the app instance whether this module is imported from app.py or loaded
+# when app.py is executed as a script (__main__).
+dash_app = None
+if "app" in sys.modules and hasattr(sys.modules["app"], "app"):
+    dash_app = sys.modules["app"].app
+elif "__main__" in sys.modules and hasattr(sys.modules["__main__"], "app"):
+    dash_app = sys.modules["__main__"].app
+else:
+    raise RuntimeError("Dash app instance not found in sys.modules")
+
 from db import engine
 from plotly.subplots import make_subplots
 from scipy.optimize import minimize
 
+from signal_analysis import (
+    backtest_signal,
+    build_backtest_figure,
+    build_sensitivity_heatmap,
+    build_trade_book,
+    load_regression_data,
+    summarize_backtest,
+)
+
 logger = logging.getLogger(__name__)
+
+# Store calibrated GARCH parameters globally (per-symbol, single-process only)
+calibrated_params: dict = {}
+
+
+def to_chicago_tz(df, ts_column="bar_ts"):
+    series = pd.to_datetime(df[ts_column])
+    if series.dt.tz is None:
+        df[ts_column] = series.dt.tz_localize("UTC").dt.tz_convert("America/Chicago")
+    else:
+        df[ts_column] = series.dt.tz_convert("America/Chicago")
+    return df
+
+
+def load_query_df(query, params=()):
+    try:
+        return pd.read_sql(query, engine, params=tuple(params))
+    except Exception:
+        logger.exception("Failed to execute query")
+        return pd.DataFrame()
+
+
+def build_backtest_stats_card(stats: dict):
+    defaults = {
+        "total_pnl": 0.0, "total_pnl_usd": 0.0, "sharpe": 0.0,
+        "num_trades": 0, "avg_trade_bps": 0.0, "win_rate": 0.0,
+        "max_drawdown": 0.0, "active_bars": 0,
+    }
+    stats = {**defaults, **(stats or {})}
+
+    def metric(label, value, color=None):
+        return html.Div(
+            [
+                html.Div(label, style={"fontSize": "11px", "color": "#888", "marginBottom": "4px",
+                                       "textTransform": "uppercase", "letterSpacing": "0.5px"}),
+                html.Div(value, style={"fontSize": "18px", "fontWeight": "600", "color": color or "#222"}),
+            ],
+            style={"padding": "10px 14px", "backgroundColor": "#fff", "borderRadius": "6px",
+                   "boxShadow": "0 1px 3px rgba(0,0,0,0.08)"},
+        )
+
+    sharpe_color = "#2ca02c" if stats["sharpe"] > 1 else "#d62728" if stats["sharpe"] < 0 else "#ff7f0e"
+    pnl_color = "#2ca02c" if stats["total_pnl"] > 0 else "#d62728"
+
+    return html.Div(
+        [
+            html.H4("Backtest Summary", style={"marginBottom": "12px", "color": "#333"}),
+            html.Div(
+                [
+                    metric("Sharpe Ratio (ann.)", f"{stats['sharpe']:.2f}", sharpe_color),
+                    metric("Total PnL", f"{stats['total_pnl']:.1f} bps  (${stats['total_pnl_usd']:.2f})", pnl_color),
+                    metric("Trades", str(stats["num_trades"])),
+                    metric("Avg Trade", f"{stats['avg_trade_bps']:.2f} bps"),
+                    metric("Win Rate", f"{stats['win_rate']:.1f}%"),
+                    metric("Max Drawdown", f"{stats['max_drawdown']:.1f} bps"),
+                ],
+                style={"display": "grid", "gridTemplateColumns": "repeat(3, 1fr)", "gap": "10px"},
+            ),
+        ],
+        style={"padding": "15px", "backgroundColor": "#f8f9fa", "borderRadius": "8px", "marginTop": "10px"},
+    )
 
 
 # Need to split-up/refactor this file eventually.
 
 
 # Dropdown callback
-@callback(
+@dash_app.callback(
     [
         Output("symbol-dropdown", "options"),
         Output("exchange-dropdown", "options"),
@@ -47,7 +129,7 @@ def update_all_dropdowns(active_tab):
 
 
 # Price spread callback
-@callback(
+@dash_app.callback(
     Output("price-spread-chart", "figure"),
     [
         Input("symbol-dropdown", "value"),
@@ -90,22 +172,11 @@ def update_price_spread_chart(symbol, exchanges, start_date, end_date, n_interva
 
     query += " ORDER BY b.bar_ts, e.exchange_name"
 
-    try:
-        df = pd.read_sql(query, engine, params=tuple(params))
-    except Exception as exc:
-        logger.exception("Failed to load price/spread data")
-        return go.Figure()
-
+    df = load_query_df(query, params)
     if df.empty:
         return go.Figure()
 
-    bar_ts_series = pd.to_datetime(df["bar_ts"])
-    if bar_ts_series.dt.tz is None:
-        df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
-            "America/Chicago"
-        )
-    else:
-        df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
+    df = to_chicago_tz(df, "bar_ts")
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     for exch in df["exchange_name"].unique():
@@ -137,7 +208,7 @@ def update_price_spread_chart(symbol, exchanges, start_date, end_date, n_interva
 
 
 # Cross spread callback
-@callback(
+@dash_app.callback(
     Output("cross-spread-chart", "figure"),
     [
         Input("symbol-dropdown", "value"),
@@ -175,14 +246,7 @@ def update_cross_spread_chart(symbol, start_date, end_date, n_intervals):
 
     if df.empty:
         return go.Figure()
-    # Converting from UTC to CDT time
-    bar_ts_series = pd.to_datetime(df["bar_ts"])
-    if bar_ts_series.dt.tz is None:
-        df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
-            "America/Chicago"
-        )
-    else:
-        df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
+    df = to_chicago_tz(df, "bar_ts")
     fig = px.line(
         df,
         x="bar_ts",
@@ -196,7 +260,7 @@ def update_cross_spread_chart(symbol, start_date, end_date, n_intervals):
 
 
 # Regression callback
-@callback(
+@dash_app.callback(
     [
         Output("regression-residuals", "figure"),
         Output("regression-zscore", "figure"),
@@ -210,30 +274,20 @@ def update_regression_analysis(symbol, hours):
         empty_fig = go.Figure().add_annotation(text="Select symbol", showarrow=False)
         return empty_fig, empty_fig, html.Div("Select symbol")
 
-    # For now if changing interval here, make sure to change below 2x
     query = """
     SELECT c.bar_ts, e1.exchange_name as target_exchange, e2.exchange_name as ref_exchange,
            c.regression_residual_bps, c.residual
     FROM cross_ex_regression c JOIN symbols s ON c.symbol_id = s.id
     JOIN exchanges e1 ON c.target_exchange_id = e1.id JOIN exchanges e2 ON c.ref_exchange_id = e2.id
-    WHERE s.symbol_code = %s AND (
-        (%s = 1 AND c.bar_ts > NOW() - INTERVAL '1 HOUR') OR
-        (%s = 4 AND c.bar_ts > NOW() - INTERVAL '4 HOURS') OR
-        (%s = 24 AND c.bar_ts > NOW() - INTERVAL '24 HOURS')
-    ) ORDER BY c.bar_ts DESC LIMIT 5000
+    WHERE s.symbol_code = %s
+      AND c.bar_ts > NOW() - make_interval(hours => %s)
+    ORDER BY c.bar_ts ASC LIMIT 5000
     """
 
     try:
-        df = pd.read_sql(query, engine, params=(symbol, hours, hours, hours))
-
-        bar_ts_series = pd.to_datetime(df["bar_ts"])
-        if bar_ts_series.dt.tz is None:
-            df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
-                "America/Chicago"
-            )
-        else:
-            df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
-    except Exception as exc:
+        df = pd.read_sql(query, engine, params=(symbol, int(hours or 24)))
+        df = to_chicago_tz(df, "bar_ts")
+    except Exception:
         logger.exception("Failed to load regression data")
         empty_fig = go.Figure().add_annotation(text="Query error", showarrow=False)
         return empty_fig, empty_fig, html.Div("Query error: unable to load data")
@@ -242,12 +296,14 @@ def update_regression_analysis(symbol, hours):
         empty_fig = go.Figure().add_annotation(text="No data", showarrow=False)
         return empty_fig, empty_fig, html.Div("No data")
 
+    df["pair_label"] = df["target_exchange"] + " vs " + df["ref_exchange"]
     fig_residuals = px.line(
         df,
         x="bar_ts",
         y="regression_residual_bps",
-        color="target_exchange",
+        color="pair_label",
         title=f"{symbol} Residuals ({hours}h)",
+        labels={"pair_label": "Exchange Pair"},
     )
     fig_residuals.add_hline(y=0, line_dash="dash", line_color="red")
 
@@ -283,16 +339,95 @@ def update_regression_analysis(symbol, hours):
     return fig_residuals, fig_zscore, stats_table
 
 
-@callback(
+@dash_app.callback(
+    [Output("signal-pair-dropdown", "options"), Output("signal-pair-dropdown", "value")],
+    [Input("regression-symbol", "value"), Input("regression-time-hours", "value")],
+    prevent_initial_call=True,
+)
+def update_signal_pair_options(symbol, hours):
+    if not symbol:
+        return [], None
+
+    df = load_regression_data(symbol, hours, limit=1000)
+    if df.empty:
+        return [], None
+
+    unique_pairs = df["pair_label"].unique()
+    options = [{"label": pair, "value": pair} for pair in unique_pairs]
+    value = unique_pairs[0] if len(unique_pairs) else None
+    return options, value
+
+
+@dash_app.callback(
+    [Output("signal-backtest-chart", "figure"), Output("signal-backtest-stats", "children"), Output("signal-trade-log", "data")],
+    [
+        Input("regression-symbol", "value"),
+        Input("regression-time-hours", "value"),
+        Input("signal-entry-bps", "value"),
+        Input("signal-exit-bps", "value"),
+        Input("signal-cost-bps", "value"),
+        Input("signal-notional-usd", "value"),
+        Input("signal-pair-dropdown", "value"),
+    ],
+    prevent_initial_call=True,
+)
+def update_signal_backtest(symbol, hours, entry_bps, exit_bps, cost_bps, notional_usd, pair_label):
+    if not symbol:
+        empty_fig = go.Figure().add_annotation(text="Select symbol", showarrow=False)
+        return empty_fig, html.Div("Select symbol"), []
+
+    df = load_regression_data(symbol, hours, limit=1000)
+    if df.empty:
+        empty_fig = go.Figure().add_annotation(text="No regression data", showarrow=False)
+        return empty_fig, build_backtest_stats_card({}), []
+
+    if not pair_label or pair_label not in df["pair_label"].unique():
+        pair_label = df["pair_label"].iloc[0]
+
+    df = df[df["pair_label"] == pair_label].copy()
+    df = to_chicago_tz(df, "bar_ts")
+    df = backtest_signal(df, float(entry_bps or 2.0), float(exit_bps or 1.0), float(cost_bps or 0.0), float(notional_usd or 10000.0))
+    stats = summarize_backtest(df)
+    fig = build_backtest_figure(df, float(entry_bps or 2.0), float(exit_bps or 1.0), float(cost_bps or 0.0), float(notional_usd or 10000.0))
+    trade_log = build_trade_book(df)
+    stats_card = build_backtest_stats_card(stats)
+
+    return fig, stats_card, trade_log.to_dict("records")
+
+
+@dash_app.callback(
+    Output("signal-sensitivity-heatmap", "figure"),
+    Input("run-sensitivity-btn", "n_clicks"),
+    [
+        State("regression-symbol", "value"),
+        State("regression-time-hours", "value"),
+        State("signal-pair-dropdown", "value"),
+        State("signal-cost-bps", "value"),
+    ],
+    prevent_initial_call=True,
+)
+def update_sensitivity_heatmap(n_clicks, symbol, hours, pair_label, cost_bps):
+    if not symbol:
+        return go.Figure().add_annotation(text="Select symbol", showarrow=False)
+    df = load_regression_data(symbol, hours, limit=1000)
+    if df.empty:
+        return go.Figure().add_annotation(text="No regression data", showarrow=False)
+    if not pair_label or pair_label not in df["pair_label"].unique():
+        pair_label = df["pair_label"].iloc[0]
+    df = df[df["pair_label"] == pair_label].copy()
+    df = to_chicago_tz(df, "bar_ts")
+    return build_sensitivity_heatmap(df, float(cost_bps or 0.0))
+
+
+@dash_app.callback(
     [Output("volatility-forecast", "figure"), Output("garch-stats", "children")],
     [
         Input("regression-symbol", "value"),
         Input("regression-time-hours", "value"),
-        State("regression-symbol", "value"),
     ],
     prevent_initial_call=True,
 )
-def garch_volatility_forecast(symbol, hours, symbol_state):
+def garch_volatility_forecast(symbol, hours):
     if not symbol:
         empty_fig = go.Figure().add_annotation(text="Select symbol", showarrow=False)
         return empty_fig, html.Div()
@@ -301,29 +436,20 @@ def garch_volatility_forecast(symbol, hours, symbol_state):
     query = """
     SELECT c.bar_ts, AVG(c.regression_residual_bps) as residual_bps
     FROM cross_ex_regression c JOIN symbols s ON c.symbol_id = s.id
-    WHERE s.symbol_code = %s AND (
-        (%s = 1 AND c.bar_ts > NOW() - INTERVAL '1 HOUR') OR
-        (%s = 4 AND c.bar_ts > NOW() - INTERVAL '4 HOURS') OR
-        (%s = 24 AND c.bar_ts > NOW() - INTERVAL '24 HOURS')
-    )
+    WHERE s.symbol_code = %s
+      AND c.bar_ts > NOW() - make_interval(hours => %s)
     GROUP BY c.bar_ts ORDER BY c.bar_ts ASC LIMIT 1000
     """
 
-    df = pd.read_sql(query, engine, params=(symbol, hours, hours, hours))
+    try:
+        df = pd.read_sql(query, engine, params=(symbol, int(hours or 24)))
+        df = to_chicago_tz(df, "bar_ts")
+    except Exception:
+        logger.exception("Failed to load GARCH data")
+        return go.Figure().add_annotation(text="Query error"), html.Div()
 
     if df.empty or len(df) < 50:
         return go.Figure().add_annotation(text="Insufficient data"), html.Div()
-    try:
-        bar_ts_series = pd.to_datetime(df["bar_ts"])
-        if bar_ts_series.dt.tz is None:
-            df["bar_ts"] = bar_ts_series.dt.tz_localize("UTC").dt.tz_convert(
-                "America/Chicago"
-            )
-        else:
-            df["bar_ts"] = bar_ts_series.dt.tz_convert("America/Chicago")
-    except Exception as exc:
-        logger.exception("Failed to convert GARCH timestamps")
-        return go.Figure().add_annotation(text="Timestamp conversion error"), html.Div()
     # Raw volatility (%)
     df["residual_bps"] = df["residual_bps"].abs()
     df["returns"] = np.log(df["residual_bps"] / df["residual_bps"].shift(1)).fillna(0)
@@ -444,10 +570,6 @@ def garch_volatility_forecast(symbol, hours, symbol_state):
     return fig, stats
 
 
-# Store calibrated parameters globally (across callbacks)
-calibrated_params = {}
-
-
 def garch_log_likelihood(params, returns):
 
     omega, alpha, beta = params
@@ -467,7 +589,7 @@ def garch_log_likelihood(params, returns):
     return nll if np.isfinite(nll) else 1e10
 
 
-@callback(
+@dash_app.callback(
     Output("garch-calibration-status", "children"),
     Input("calibrate-garch-btn", "n_clicks"),
     [State("regression-symbol", "value"), State("regression-time-hours", "value")],
@@ -531,7 +653,7 @@ def calibrate_garch(n_clicks, symbol, hours):
         return html.Div("Calibration failed", style={"color": "red"})
 
 
-@callback(
+@dash_app.callback(
     [
         Output("latency-p99-chart", "figure"),
         Output("latency-stats-table", "data"),
@@ -657,7 +779,7 @@ def update_latency_dashboard(exchange_filter, start_date, end_date, n_intervals)
             FROM latency_metrics WHERE {where_clause} AND exchange = %s
         """
         try:
-            error_result = pd.read_sql(error_query, engine, params=params + [exchange])
+            error_result = pd.read_sql(error_query, engine, params=tuple(params + [exchange]))
             total_errors = (
                 int(error_result["errors"].iloc[0]) if not error_result.empty else 0
             )
