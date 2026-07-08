@@ -2,8 +2,7 @@
 
 This document explains the statistical arbitrage strategy implemented in the Signal
 Backtest section of the dashboard: how the signal is constructed, how it is validated,
-and what its known limitations are. It's written for anyone reviewing this project who
-wants to understand the reasoning behind the numbers, not just the numbers themselves.
+and what its known limitations are. It explains some of the reasoning behind the numbers.
 
 ## 1. Signal Construction
 
@@ -37,7 +36,7 @@ The strategy treats the residual as a mean-reverting spread and trades its rever
 Execution is same-bar: a threshold crossed on a given bar is filled at that bar's
 closing price (see [Limitations](#5-known-limitations) for why this is optimistic).
 
-PnL is computed using the hedge ratio, not a naive 1:1 notional split:
+PnL is computed using the hedge ratio, not a 1:1 notional split:
 
 ```
 pnl_bps = position * (target_return_bps - beta * ref_return_bps)
@@ -66,7 +65,7 @@ noise.
 Using an AR(1)/Ornstein-Uhlenbeck-style regression of the residual's period-over-period
 change against its lagged level, the half-life (in bars) of a reversion back toward zero
 is estimated. This is useful for sanity-checking the entry/exit thresholds: if the
-half-life is, say, 3 bars, holding a position for tens of bars while waiting for a
+half-life is, for example, 3 bars, holding a position for tens of bars while waiting for a
 larger reversion would be inconsistent with the estimated dynamics.
 
 ### 3.3 Out-of-sample validation (train/test split)
@@ -88,19 +87,19 @@ sample window itself) are overfit.
   using `sqrt(bars_per_year)` for 1-minute bars. This is a useful metric for *comparing*
   parameter settings against each other, but the absolute value should be read with
   caution — it is calculated over all bars including long inactive stretches (which
-  suppresses variance more than mean), so it will read materially higher than a
+  suppresses variance more than mean), so it will read higher than a
   trade-level or active-bars-only Sharpe would.
 - **Max drawdown**, **win rate**, and **trade count** are also reported for a fuller
   picture beyond Sharpe alone.
 
 ## 5. Known Limitations
 
-Being transparent about what this backtest does *not* model is as important as the
+What this backtest does *not* model is as important as the
 strategy logic itself:
 
 - **Execution assumption**: fills are assumed at the bar's closing price with no
-  latency between signal and execution. Real trading introduces at least one bar
-  (or more, depending on infrastructure) of delay, plus slippage — the Latency tab in
+  latency between signal and execution. Real trading would introduce some delay
+  (depending on infrastructure), plus slippage — the Latency tab in
   this dashboard is a step toward quantifying that gap, but it isn't fed back into the
   backtest PnL.
 - **No order book depth / queue modeling**: the strategy only ever sees top-of-book mid
@@ -113,8 +112,3 @@ strategy logic itself:
 - **Single flat fee assumption**: transaction cost is one input across both exchanges,
   rather than calibrated per-exchange fee tiers.
 
-Taken together, this project's goal isn't to claim a production-ready trading strategy
-— it's to demonstrate the full research and engineering pipeline (ingestion → ETL →
-signal construction → statistical validation → backtesting with realistic frictions)
-that underlies quantitative trading research, along with an honest accounting of what
-would need to change before any of this touched real capital.
