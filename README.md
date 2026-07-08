@@ -1,4 +1,4 @@
-# Arb: Cross-Exchange Crypto Analytics
+# xvenue-arb: Cross-Exchange Crypto Analytics
 
 [![Tests](https://github.com/Chicago-tr/ExchangeAggregator/actions/workflows/tests.yml/badge.svg)](https://github.com/Chicago-tr/ExchangeAggregator/actions/workflows/tests.yml)
 
@@ -8,7 +8,7 @@ This project ingests bid/ask quotes from exchanges, stores them in PostgreSQL, c
 
 Signal Backtest Demo:
 ![Signal Backtest Demo](assets/signal_use.gif)
-Check out "Strategy methodology" below for more details.
+Check out "Strategy methodology" below for more details and limitations.
  
 ## Core capabilities
 
