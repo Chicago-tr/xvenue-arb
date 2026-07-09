@@ -7,7 +7,7 @@ An end-to-end analytics platform for live crypto market data, built for trading 
 Ingests bid/ask quotes from exchanges, stores them in PostgreSQL, computes minute-level bars and cross-exchange spread metrics with PySpark, and displays results through a Plotly Dash dashboard.
 
 Signal Backtest Demo:
-![Signal Backtest Demo](assets/signal_use.gif)
+![Signal Backtest Demo](assets/signal_final.gif)
 Check out "Strategy methodology" below for more details and limitations.
  
 ## Core capabilities
